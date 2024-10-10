@@ -21,7 +21,7 @@ install(
 )
 
 install(
-  DIRECTORY launch include
+  DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 

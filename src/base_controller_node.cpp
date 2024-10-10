@@ -68,15 +68,15 @@ namespace roboteqBridge {
         catch (rclcpp::exceptions::RCLError e){}
       }
 
-      this->reset_controller();
-      this->disable_echo();
-      this->query_motor_feedback_stream();
-      this->query_battery_state_stream();
-      this->serial_port.flush();
+      //this->reset_controller();
+      //this->disable_echo();
+      // this->query_motor_feedback_stream();
+      // this->query_battery_state_stream();
+      //this->serial_port.flush();
 
-      while (rclcpp::ok()) {
-        read_feedback_stream();
-      }
+      // while (rclcpp::ok()) {
+      //   read_feedback_stream();
+      // }
     }
 
   private:
@@ -86,7 +86,7 @@ namespace roboteqBridge {
     std::string param_port_name = "/dev/roboteq";
     uint16_t param_port_timeout = 500; // ms
     long   param_baud_rate = 115200;
-    double param_gear_ratio = 55.0;
+    double param_gear_ratio = 18.6868;
     double param_wheel_radius = 0.167;
     double param_wheel_separation = 0.560;
     bool   param_channel_order_RL = true;
@@ -94,10 +94,12 @@ namespace roboteqBridge {
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub;
 
     void twist_callback(const geometry_msgs::msg::Twist &twist){
-      double left_track_linear_velocity  = (2.0f * twist.linear.x - param_wheel_separation * twist.angular.z)/2.0f;
-      double right_track_linear_velocity = (2.0f * twist.linear.x + param_wheel_separation * twist.angular.z)/2.0f;
-      send_motor_rpm_left( linear_velocity_to_rpm(left_track_linear_velocity));
-      send_motor_rpm_right(linear_velocity_to_rpm(right_track_linear_velocity));
+      double left_wheel_angular_velocity  = ((2.0f * twist.linear.x - param_wheel_separation * twist.angular.z)/2.0f) / param_wheel_radius;
+      double right_wheel_angular_velocity = ((2.0f * twist.linear.x + param_wheel_separation * twist.angular.z)/2.0f) / param_wheel_radius;
+      int32_t right_wheel_rpm = (int32_t)((floor(60.0 * right_wheel_angular_velocity)/TWO_PI)*param_gear_ratio);
+      int32_t left_wheel_rpm  = (int32_t)((floor(60.0 * left_wheel_angular_velocity)/TWO_PI)*param_gear_ratio);
+      send_motor_rpm_left(left_wheel_rpm);
+      send_motor_rpm_right(right_wheel_rpm);
     }
 
     void reset_controller()
@@ -379,29 +381,6 @@ namespace roboteqBridge {
         } // eof bytes available
     }
 
-    double map(double x, double in_min, double in_max, double out_min, double out_max) {
-      return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-    };
-
-    int32_t linear_velocity_to_rpm(double lin_vel)
-    {
-        return int32_t( (60.0f * lin_vel) / (param_wheel_radius * TWO_PI * param_gear_ratio) );
-    }
-
-    int32_t angular_velocity_to_rpm(double ang_vel)
-    {
-        return int32_t((ang_vel / TWO_PI) * 60.0 * param_gear_ratio );
-    }
-
-    int32_t norm_to_power_cmd(double norm)
-    {
-      return int32_t(map(norm, -1.0, 1.0, -2000, 2000));
-    }
-
-    double calculate_wheel_angular_velocity(int32_t motor_rpm)
-    {
-        return ( ( (double)motor_rpm * TO_RAD_PER_SEC ) / param_gear_ratio );
-    }
   };
 }
 

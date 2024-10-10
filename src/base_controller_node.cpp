@@ -94,11 +94,12 @@ namespace roboteqBridge {
       this->set_watchdog(param_watchdog_timeout);
       this->serial_port.flush();
 
-      this->timer_ = this->create_wall_timer(10ms, std::bind(&baseController::read_feedback_stream, this));
+      this->timer_ = this->create_wall_timer(1ms, std::bind(&baseController::read_feedback_stream, this));
       this->battery_pub = create_publisher<sensor_msgs::msg::BatteryState>("/base/battery", 10);
-      this->left_current_pub = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/current", 10);
-      this->right_current_pub = create_publisher<std_msgs::msg::Float32>("/right_motor/measure/current", 10);
-
+      this->left_current_pub   = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/current", 10);
+      this->right_current_pub  = create_publisher<std_msgs::msg::Float32>("/right_motor/measured/current", 10);
+      this->left_velocity_pub  = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/velocity", 10);
+      this->right_velocity_pub = create_publisher<std_msgs::msg::Float32>("/right_motor/measured/velocity", 10);
     }
 
   private:
@@ -132,8 +133,12 @@ namespace roboteqBridge {
 
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr left_current_pub;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr right_current_pub;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr left_velocity_pub;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr right_velocity_pub;
     std_msgs::msg::Float32 left_motor_current_msg;
     std_msgs::msg::Float32 right_motor_current_msg;
+    std_msgs::msg::Float32 left_motor_velocity_msg;
+    std_msgs::msg::Float32 right_motor_velocity_msg;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub;
 
@@ -402,8 +407,10 @@ namespace roboteqBridge {
                     }
                     right_motor.velocity = calculate_wheel_angular_velocity(right_motor.encoder);
                     right_motor.current  = right_motor.decaamps/10.0f;
-                    right_motor_current_msg.data = right_motor.current;
+                    right_motor_current_msg.data  = right_motor.current;
+                    right_motor_velocity_msg.data = right_motor.velocity;
                     right_current_pub->publish(right_motor_current_msg);
+                    right_velocity_pub->publish(right_motor_velocity_msg);
                 }
                 else if (buffer.substr(0,3) == lkey) { // LEFT MOTOR
                     ss >> left_motor.decaamps >> left_motor.encoder;
@@ -414,7 +421,9 @@ namespace roboteqBridge {
                     left_motor.velocity = calculate_wheel_angular_velocity(left_motor.encoder);
                     left_motor.current  = left_motor.decaamps/10.0f;
                     left_motor_current_msg.data = left_motor.current;
+                    left_motor_velocity_msg.data = left_motor.velocity;
                     left_current_pub->publish(left_motor_current_msg);
+                    left_velocity_pub->publish(left_motor_velocity_msg);
                 }
                 else if (buffer.substr(0,3) == bkey) { // BATTERY
                     int32_t battery_decavolts;

@@ -427,6 +427,7 @@ namespace roboteqBridge {
                     }
                     battery_msg.header.stamp = this->get_clock()->now();
                     battery_msg.temperature = controller_temp;
+                    battery_msg.current = -(fabs(left_motor.current) + fabs(right_motor.current));
                     battery_msg.voltage = battery_decavolts/10.0;
                     battery_pub->publish(battery_msg);
                 }

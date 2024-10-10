@@ -1,16 +1,20 @@
 #include <unistd.h>
 #include <iostream>
 #include <sstream>
+#include <chrono>
 #include <signal.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/node.hpp>
 #include <serial/serial.h>
 #include <geometry_msgs/msg/twist.hpp>
+#include <sensor_msgs/msg/battery_state.hpp>
 
 using namespace std;
 
 #define TWO_PI (2*M_PI)
 #define TO_RAD_PER_SEC ((2*M_PI)/60)
+
+using namespace std::chrono_literals;
 
 namespace roboteqBridge {
   class baseController: public rclcpp::Node {
@@ -50,6 +54,21 @@ namespace roboteqBridge {
       this->param_channel_order_RL = this->get_parameter("channel_order_RL").as_bool();
       RCLCPP_INFO_STREAM(this->get_logger(), "Channel order\t: " << param_channel_order_RL);
 
+      this->declare_parameter("watchdog_timeout", this->param_watchdog_timeout);
+      this->param_watchdog_timeout = this->get_parameter("watchdog_timeout").as_int();
+      RCLCPP_INFO_STREAM(this->get_logger(), "Watchdog timeout\t: " << param_watchdog_timeout);
+
+      this->declare_parameter("battery_frame_id", this->param_battery_frame_id);
+      this->param_battery_frame_id = this->get_parameter("battery_frame_id").as_string();
+      battery_msg.header.frame_id = param_battery_frame_id;
+      RCLCPP_INFO_STREAM(this->get_logger(), "Battery frame\t: " << param_battery_frame_id);
+
+      this->declare_parameter("power_supply_technology", this->param_battery_tech);
+      this->param_battery_frame_id = this->get_parameter("power_supply_technology").as_int();
+      battery_msg.power_supply_technology = param_battery_tech;
+      battery_msg.present = true;
+      RCLCPP_INFO_STREAM(this->get_logger(), "Battery technology\t: " << param_battery_tech);
+
       twist_sub = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 1, std::bind(&baseController::twist_callback, this, std::placeholders::_1));
 
       RCLCPP_INFO_STREAM(this->get_logger(), "Tyring to open serial port " << param_port_name << "..." );
@@ -68,28 +87,37 @@ namespace roboteqBridge {
         catch (rclcpp::exceptions::RCLError e){}
       }
 
-      //this->reset_controller();
-      //this->disable_echo();
-      // this->query_motor_feedback_stream();
-      // this->query_battery_state_stream();
-      //this->serial_port.flush();
+      this->reset_controller();
+      this->disable_echo();
+      this->query_motor_feedback_stream();
+      this->query_battery_state_stream();
+      this->set_watchdog(param_watchdog_timeout);
+      this->serial_port.flush();
 
-      // while (rclcpp::ok()) {
-      //   read_feedback_stream();
-      // }
+      timer_ = this->create_wall_timer(10ms, std::bind(&baseController::read_feedback_stream, this));
+      battery_pub = create_publisher<sensor_msgs::msg::BatteryState>("/battery", 10);
+
     }
 
   private:
 
     size_t  count_;
+    rclcpp::TimerBase::SharedPtr timer_;
     serial::Serial serial_port;
     std::string param_port_name = "/dev/roboteq";
     uint16_t param_port_timeout = 500; // ms
+    uint16_t param_watchdog_timeout = 2000; // ms
     long   param_baud_rate = 115200;
     double param_gear_ratio = 18.6868;
     double param_wheel_radius = 0.167;
     double param_wheel_separation = 0.560;
     bool   param_channel_order_RL = true;
+
+    sensor_msgs::msg::BatteryState battery_msg;
+    rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_pub;
+
+    std::string param_battery_frame_id = "base_link";
+    uint8_t param_battery_tech = 1;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub;
 
@@ -375,6 +403,10 @@ namespace roboteqBridge {
                         RCLCPP_WARN(this->get_logger(),"Battery channel: unexpected data");
                         return;
                     }
+                    battery_msg.header.stamp = this->get_clock()->now();
+                    battery_msg.temperature = controller_temp;
+                    battery_msg.voltage = battery_decavolts/10.0;
+                    battery_pub->publish(battery_msg);
                 }
             } // eof valid header
             else return; // Return if reading failed

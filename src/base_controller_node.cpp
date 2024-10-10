@@ -6,6 +6,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/node.hpp>
 #include <serial/serial.h>
+#include <std_msgs/msg/float32.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 
@@ -67,7 +68,6 @@ namespace roboteqBridge {
       this->param_battery_frame_id = this->get_parameter("power_supply_technology").as_int();
       battery_msg.power_supply_technology = param_battery_tech;
       battery_msg.present = true;
-      RCLCPP_INFO_STREAM(this->get_logger(), "Battery technology\t: " << param_battery_tech);
 
       twist_sub = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 1, std::bind(&baseController::twist_callback, this, std::placeholders::_1));
 
@@ -94,12 +94,21 @@ namespace roboteqBridge {
       this->set_watchdog(param_watchdog_timeout);
       this->serial_port.flush();
 
-      timer_ = this->create_wall_timer(10ms, std::bind(&baseController::read_feedback_stream, this));
-      battery_pub = create_publisher<sensor_msgs::msg::BatteryState>("/battery", 10);
+      this->timer_ = this->create_wall_timer(10ms, std::bind(&baseController::read_feedback_stream, this));
+      this->battery_pub = create_publisher<sensor_msgs::msg::BatteryState>("/base/battery", 10);
+      this->left_current_pub = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/current", 10);
+      this->right_current_pub = create_publisher<std_msgs::msg::Float32>("/right_motor/measure/current", 10);
 
     }
 
   private:
+
+    struct motor_state {
+      int32_t decaamps;
+      int32_t encoder;
+      double velocity;
+      double current;
+    };
 
     size_t  count_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -107,19 +116,30 @@ namespace roboteqBridge {
     std::string param_port_name = "/dev/roboteq";
     uint16_t param_port_timeout = 500; // ms
     uint16_t param_watchdog_timeout = 2000; // ms
-    long   param_baud_rate = 115200;
+    long   param_baud_rate = 234000;
     double param_gear_ratio = 18.6868;
     double param_wheel_radius = 0.167;
     double param_wheel_separation = 0.560;
     bool   param_channel_order_RL = true;
 
+    motor_state left_motor;
+    motor_state right_motor;
+
     sensor_msgs::msg::BatteryState battery_msg;
     rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_pub;
-
     std::string param_battery_frame_id = "base_link";
     uint8_t param_battery_tech = 1;
 
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr left_current_pub;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr right_current_pub;
+    std_msgs::msg::Float32 left_motor_current_msg;
+    std_msgs::msg::Float32 right_motor_current_msg;
+
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub;
+
+    float calculate_wheel_angular_velocity(int32_t motor_rpm) {
+        return ( ( (float)motor_rpm * TO_RAD_PER_SEC ) / param_gear_ratio );
+    }
 
     void twist_callback(const geometry_msgs::msg::Twist &twist){
       double left_wheel_angular_velocity  = ((2.0f * twist.linear.x - param_wheel_separation * twist.angular.z)/2.0f) / param_wheel_radius;
@@ -375,24 +395,26 @@ namespace roboteqBridge {
                 std::string data = buffer.substr(3);
                 std::stringstream ss(data);
                 if (buffer.substr(0,3) == rkey) { // RIGHT MOTOR
-                    int32_t current_decaamp_right;
-                    int32_t odom_encoder_right;
-                    ss >> current_decaamp_right >> odom_encoder_right;
-                    if (ss.fail()) {
-                        // Invalid message
+                    ss >> right_motor.decaamps >> right_motor.encoder;
+                    if (ss.fail()) { // Invalid message
                         RCLCPP_WARN(this->get_logger(),"Right motor channel: unexpected data");
                         return;
                     }
+                    right_motor.velocity = calculate_wheel_angular_velocity(right_motor.encoder);
+                    right_motor.current  = right_motor.decaamps/10.0f;
+                    right_motor_current_msg.data = right_motor.current;
+                    right_current_pub->publish(right_motor_current_msg);
                 }
                 else if (buffer.substr(0,3) == lkey) { // LEFT MOTOR
-                    int32_t odom_encoder_left;
-                    int32_t current_decaamp_left;
-                    ss >> current_decaamp_left >> odom_encoder_left;
-                    if (ss.fail()) {
-                        // Invalid message
+                    ss >> left_motor.decaamps >> left_motor.encoder;
+                    if (ss.fail()) { // Invalid message
                         RCLCPP_WARN(this->get_logger(),"Left motor channel: unexpected data");
                         return;
                     }
+                    left_motor.velocity = calculate_wheel_angular_velocity(left_motor.encoder);
+                    left_motor.current  = left_motor.decaamps/10.0f;
+                    left_motor_current_msg.data = left_motor.current;
+                    left_current_pub->publish(left_motor_current_msg);
                 }
                 else if (buffer.substr(0,3) == bkey) { // BATTERY
                     int32_t battery_decavolts;

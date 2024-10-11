@@ -69,8 +69,6 @@ namespace roboteqBridge {
       battery_msg.power_supply_technology = param_battery_tech;
       battery_msg.present = true;
 
-      twist_sub = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 1, std::bind(&baseController::twist_callback, this, std::placeholders::_1));
-
       RCLCPP_INFO_STREAM(this->get_logger(), "Tyring to open serial port " << param_port_name << "..." );
       try {
           serial_port.open();
@@ -98,8 +96,12 @@ namespace roboteqBridge {
       this->battery_pub = create_publisher<sensor_msgs::msg::BatteryState>("/base/battery", 10);
       this->left_current_pub   = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/current", 10);
       this->right_current_pub  = create_publisher<std_msgs::msg::Float32>("/right_motor/measured/current", 10);
-      this->left_velocity_pub  = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/velocity", 10);
-      this->right_velocity_pub = create_publisher<std_msgs::msg::Float32>("/right_motor/measured/velocity", 10);
+      this->left_velocity_pub  = create_publisher<std_msgs::msg::Float32>("/left_motor/measured/angular_velocity", 10);
+      this->right_velocity_pub = create_publisher<std_msgs::msg::Float32>("/right_motor/measured/angular_velocity", 10);
+
+      this->twist_sub = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 1, std::bind(&baseController::twist_callback, this, std::placeholders::_1));
+      this->left_velocity_sub = this->create_subscription<std_msgs::msg::Float32>("left_motor/command/angular_velocity", 1, std::bind(&baseController::left_motor_callback, this, std::placeholders::_1));
+      this->right_velocity_sub = this->create_subscription<std_msgs::msg::Float32>("right_motor/command/angular_velocity", 1, std::bind(&baseController::right_motor_callback, this, std::placeholders::_1));
     }
 
   private:
@@ -141,6 +143,8 @@ namespace roboteqBridge {
     std_msgs::msg::Float32 right_motor_velocity_msg;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr twist_sub;
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr left_velocity_sub;
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr right_velocity_sub;
 
     float calculate_wheel_angular_velocity(int32_t motor_rpm) {
         return ( ( (float)motor_rpm * TO_RAD_PER_SEC ) / param_gear_ratio );
@@ -152,6 +156,16 @@ namespace roboteqBridge {
       int32_t right_wheel_rpm = (int32_t)((floor(60.0 * right_wheel_angular_velocity)/TWO_PI)*param_gear_ratio);
       int32_t left_wheel_rpm  = (int32_t)((floor(60.0 * left_wheel_angular_velocity)/TWO_PI)*param_gear_ratio);
       send_motor_rpm_left(left_wheel_rpm);
+      send_motor_rpm_right(right_wheel_rpm);
+    }
+
+    void left_motor_callback(const std_msgs::msg::Float32 &command){
+      int32_t left_wheel_rpm  = (int32_t)((floor(60.0 * command.data)/TWO_PI)*param_gear_ratio);
+      send_motor_rpm_left(left_wheel_rpm);
+    }
+
+    void right_motor_callback(const std_msgs::msg::Float32 &command){
+      int32_t right_wheel_rpm = (int32_t)((floor(60.0 * command.data)/TWO_PI)*param_gear_ratio);
       send_motor_rpm_right(right_wheel_rpm);
     }
 

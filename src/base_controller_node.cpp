@@ -68,6 +68,12 @@ namespace roboteqBridge {
       this->declare_parameter("watchdog_timeout", this->param_watchdog_timeout);
       this->param_watchdog_timeout = this->get_parameter("watchdog_timeout").as_int();
 
+      this->declare_parameter("undervoltage_limit", this->param_undervoltage_limit);
+      this->param_undervoltage_limit = this->get_parameter("undervoltage_limit").as_double();
+
+      this->declare_parameter("overvoltage_limit", this->param_overvoltage_limit);
+      this->param_overvoltage_limit = this->get_parameter("overvoltage_limit").as_double();
+
       this->declare_parameter("current_limit", this->param_current_limit);
       this->param_current_limit = this->get_parameter("current_limit").as_int();
 
@@ -102,6 +108,8 @@ namespace roboteqBridge {
         catch (rclcpp::exceptions::RCLError e){}
       }
 
+      this->set_undervoltage_limit(param_undervoltage_limit);
+      this->set_overvoltage_limit(param_overvoltage_limit);
       this->set_current_limit(param_current_limit);
       this->set_max_rpm(param_max_rpm);
       this->set_acceleration_rate(param_acceleration_rate);
@@ -152,6 +160,8 @@ namespace roboteqBridge {
     uint16_t param_max_rpm = 2000; // rpm
     uint16_t param_control_loop = 1; // closed-loop speed
     uint16_t param_encoder_ppr = 2048;
+    double   param_undervoltage_limit = 20.0; // volts
+    double   param_overvoltage_limit = 30.0; // volts
 
     double   param_gear_ratio = 18.6868;
     double   param_wheel_radius = 0.167;
@@ -231,6 +241,15 @@ namespace roboteqBridge {
       RCLCPP_INFO(this->get_logger(), "Command echo \t: ON");
     }
 
+    void save_configuration()
+    {
+      // save config to eeprom
+      std::stringstream cmd;
+      cmd << "%EESAV\r";
+      serial_port.write(cmd.str());
+      RCLCPP_INFO(this->get_logger(), "Configuration saved.");
+    }
+
     void set_watchdog(uint16_t watchdog_timeout)
     {
       // set watchdog timeout
@@ -238,6 +257,20 @@ namespace roboteqBridge {
       wdt_cmd << "^RWD " << watchdog_timeout << "\r";
       serial_port.write(wdt_cmd.str());
       RCLCPP_INFO(this->get_logger(), "Watchdog timeout\t: %d", watchdog_timeout);
+    }
+
+    void set_undervoltage_limit(float limit)
+    {
+      std::stringstream cmd;
+      cmd << "^UVL " << uint16_t(limit*10) << "\r";
+      serial_port.write(cmd.str());
+    }
+
+    void set_overvoltage_limit(float limit)
+    {
+      std::stringstream cmd;
+      cmd << "^OVL " << uint16_t(limit*10) << "\r";
+      serial_port.write(cmd.str());
     }
 
     void set_current_limit(uint16_t motor_amp_limit)

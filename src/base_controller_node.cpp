@@ -55,10 +55,6 @@ namespace roboteqBridge {
       this->param_channel_order_RL = this->get_parameter("channel_order_RL").as_bool();
       RCLCPP_INFO_STREAM(this->get_logger(), "Channel order\t: " << param_channel_order_RL);
 
-      this->declare_parameter("watchdog_timeout", this->param_watchdog_timeout);
-      this->param_watchdog_timeout = this->get_parameter("watchdog_timeout").as_int();
-      RCLCPP_INFO_STREAM(this->get_logger(), "Watchdog timeout\t: " << param_watchdog_timeout);
-
       this->declare_parameter("battery_frame_id", this->param_battery_frame_id);
       this->param_battery_frame_id = this->get_parameter("battery_frame_id").as_string();
       battery_msg.header.frame_id = param_battery_frame_id;
@@ -69,27 +65,57 @@ namespace roboteqBridge {
       battery_msg.power_supply_technology = param_battery_tech;
       battery_msg.present = true;
 
-      RCLCPP_INFO_STREAM(this->get_logger(), "Tyring to open serial port " << param_port_name << "..." );
+      this->declare_parameter("watchdog_timeout", this->param_watchdog_timeout);
+      this->param_watchdog_timeout = this->get_parameter("watchdog_timeout").as_int();
+
+      this->declare_parameter("current_limit", this->param_current_limit);
+      this->param_current_limit = this->get_parameter("current_limit").as_int();
+
+      this->declare_parameter("max_rpm", this->param_max_rpm);
+      this->param_max_rpm = this->get_parameter("max_rpm").as_int();
+
+      this->declare_parameter("acceleration_rate", this->param_acceleration_rate);
+      this->param_acceleration_rate = this->get_parameter("acceleration_rate").as_int();
+
+      this->declare_parameter("deceleration_rate", this->param_deceleration_rate);
+      this->param_deceleration_rate = this->get_parameter("deceleration_rate").as_int();
+
+      this->declare_parameter("control_loop_mode", this->param_control_loop);
+      this->param_control_loop = this->get_parameter("control_loop_mode").as_int();
+
+      this->declare_parameter("encoder_ppr", this->param_encoder_ppr);
+      this->param_encoder_ppr = this->get_parameter("encoder_ppr").as_int();
+
+      RCLCPP_INFO(this->get_logger(), "-------------------");
       try {
           serial_port.open();
           if ( serial_port.isOpen() )
           {
-              RCLCPP_INFO(this->get_logger(), "Successfully opened serial port.");
+              RCLCPP_INFO_STREAM(this->get_logger(), "Connection\t: OPEN");
           }
       }
       catch (serial::IOException e) {
-        RCLCPP_ERROR(this->get_logger(),"Failed to open serial port");
+        RCLCPP_ERROR(this->get_logger(),"Failed to open serial port. Exiting...");
         try {
           rclcpp::shutdown();
         }
         catch (rclcpp::exceptions::RCLError e){}
       }
 
-      this->reset_controller();
-      this->disable_echo();
+      this->set_current_limit(param_current_limit);
+      this->set_max_rpm(param_max_rpm);
+      this->set_acceleration_rate(param_acceleration_rate);
+      this->set_deceleration_rate(param_deceleration_rate);
+      this->set_encoder_ppr(param_encoder_ppr);
+      this->set_pid_parameters(1, 1.5, 1.0, 0.0); // TODO: dyn. reconf
+      this->set_pid_parameters(2, 1.5, 1.0, 0.0);
+      this->set_watchdog(param_watchdog_timeout);
+      this->set_control_loop(param_control_loop);
       this->query_motor_feedback_stream();
       this->query_battery_state_stream();
-      this->set_watchdog(param_watchdog_timeout);
+      this->reset_emergency_stop();
+      this->clear_buffer_history();
+      this->disable_echo();
       this->serial_port.flush();
 
       this->timer_ = this->create_wall_timer(1ms, std::bind(&baseController::read_feedback_stream, this));
@@ -115,15 +141,24 @@ namespace roboteqBridge {
 
     size_t  count_;
     rclcpp::TimerBase::SharedPtr timer_;
+
     serial::Serial serial_port;
     std::string param_port_name = "/dev/roboteq";
     uint16_t param_port_timeout = 500; // ms
+    long     param_baud_rate = 234000;
+
     uint16_t param_watchdog_timeout = 2000; // ms
-    long   param_baud_rate = 234000;
-    double param_gear_ratio = 18.6868;
-    double param_wheel_radius = 0.167;
-    double param_wheel_separation = 0.560;
-    bool   param_channel_order_RL = true;
+    uint16_t param_current_limit = 60; // amps
+    uint16_t param_acceleration_rate = 8000; // rpm/sec
+    uint16_t param_deceleration_rate = 8000; // rpm/sec
+    uint16_t param_max_rpm = 2000; // rpm
+    uint16_t param_control_loop = 1; // closed-loop speed
+    uint16_t param_encoder_ppr = 2048;
+
+    double   param_gear_ratio = 18.6868;
+    double   param_wheel_radius = 0.167;
+    double   param_wheel_separation = 0.560;
+    bool     param_channel_order_RL = true;
 
     motor_state left_motor;
     motor_state right_motor;
@@ -184,10 +219,18 @@ namespace roboteqBridge {
 
     void disable_echo()
     {
-      // disable echo
+      // disable command echo
       serial_port.write("^ECHOF 1\r");
       serial_port.flush();
-      RCLCPP_INFO(this->get_logger(), "Command echo off.");
+      RCLCPP_INFO(this->get_logger(), "Command echo \t: OFF");
+    }
+
+    void enable_echo()
+    {
+      // enable command echo
+      serial_port.write("^ECHOF 0\r");
+      serial_port.flush();
+      RCLCPP_INFO(this->get_logger(), "Command echo \t: ON");
     }
 
     void set_watchdog(uint16_t watchdog_timeout)
@@ -196,18 +239,19 @@ namespace roboteqBridge {
       std::stringstream wdt_cmd;
       wdt_cmd << "^RWD " << watchdog_timeout << "\r";
       serial_port.write(wdt_cmd.str());
-      RCLCPP_INFO(this->get_logger(), "Watchdog configured.");
+      RCLCPP_INFO(this->get_logger(), "Watchdog timeout\t: %d", watchdog_timeout);
     }
 
-    void set_current_limit(uint16_t motor_amp_limit){
-      // set motor amps limit (A * 10)
+    void set_current_limit(uint16_t motor_amp_limit)
+    {
+      // set motor amps limit
       std::stringstream alim_cmd1;
       alim_cmd1 << "^ALIM 1 " << motor_amp_limit*10 << "\r";
       serial_port.write(alim_cmd1.str());
       std::stringstream alim_cmd2;
       alim_cmd2 << "^ALIM 2 " << motor_amp_limit*10 << "\r";
       serial_port.write(alim_cmd2.str());
-      RCLCPP_INFO(this->get_logger(), "Maximum motor current set: %f Amps", motor_amp_limit*10.0f);
+      RCLCPP_INFO(this->get_logger(), "Max. current\t: %d Amps", motor_amp_limit);
     }
 
     void set_max_rpm(uint16_t motor_max_speed)
@@ -219,10 +263,11 @@ namespace roboteqBridge {
       std::stringstream mxrpm_cmd2;
       mxrpm_cmd2 << "^MXRPM 2 " << motor_max_speed << "\r";
       serial_port.write(mxrpm_cmd2.str());
-      RCLCPP_INFO(this->get_logger(), "Maximum motor speed set: %d RPM", motor_max_speed);
+      RCLCPP_INFO(this->get_logger(), "Max. velocity\t: %d RPM", motor_max_speed);
     }
 
-    void set_acceleration_rate(uint16_t motor_max_acceleration){
+    void set_acceleration_rate(uint16_t motor_max_acceleration)
+    {
       // set max motor acceleration rate (rpm/s * 10)
       std::stringstream mac_cmd1;
       mac_cmd1 << "^MAC 1 " << motor_max_acceleration*10 << "\r";
@@ -230,10 +275,11 @@ namespace roboteqBridge {
       std::stringstream mac_cmd2;
       mac_cmd2 << "^MAC 2 " << motor_max_acceleration*10 << "\r";
       serial_port.write(mac_cmd2.str());
-      RCLCPP_INFO(this->get_logger(), "Maximum motor acceleration set: %d RPM/sec", int32_t(motor_max_acceleration));
+      RCLCPP_INFO(this->get_logger(), "Acceleration \t: %d RPM/sec", int32_t(motor_max_acceleration));
     }
 
-    void set_deceleration_rate(uint16_t motor_max_deceleration){
+    void set_deceleration_rate(uint16_t motor_max_deceleration)
+    {
       // set max motor deceleration rate (rpm/s * 10)
       std::stringstream mdec_cmd1;
       mdec_cmd1 << "^MDEC 1 " << motor_max_deceleration*10 << "\r";
@@ -241,7 +287,7 @@ namespace roboteqBridge {
       std::stringstream mdec_cmd2;
       mdec_cmd2 << "^MDEC 2 " << motor_max_deceleration*10 << "\r";
       serial_port.write(mdec_cmd2.str());
-      RCLCPP_INFO(this->get_logger(), "Maximum motor deceleration set: %d RPM/sec", int32_t(motor_max_deceleration));
+      RCLCPP_INFO(this->get_logger(), "Deceleration \t: %d RPM/sec", int32_t(motor_max_deceleration));
     }
 
     void set_digital_output(const int32_t number, bool state)
@@ -278,7 +324,7 @@ namespace roboteqBridge {
         case 0:
           serial_port.write("^MMOD 1 0\r");
           serial_port.write("^MMOD 2 0\r");
-          RCLCPP_INFO(this->get_logger(), "Open loop control.");
+          RCLCPP_INFO(this->get_logger(), "Control loop\t: open");
         break;
         case 1:
           // set motor operating mode to closed-loop speed
@@ -287,10 +333,12 @@ namespace roboteqBridge {
           // set encoder mode (18 for feedback on motor1, 34 for feedback on motor2)
           serial_port.write("^EMOD 1 18\r");
           serial_port.write("^EMOD 2 34\r");
-          RCLCPP_INFO(this->get_logger(), "Closed loop speed control.");
+          RCLCPP_INFO(this->get_logger(), "Control loop\t: closed-loop speed");
         break;
         default:
-          RCLCPP_INFO(this->get_logger(), "This mode is not implemented.");
+          RCLCPP_INFO(this->get_logger(), "Control loop\t: unsupported, reverting to open loop");
+          serial_port.write("^MMOD 1 0\r");
+          serial_port.write("^MMOD 2 0\r");
         break;
       }
     }
@@ -304,7 +352,21 @@ namespace roboteqBridge {
       left_enccmd << "^EPPR 2 " << encoder_ppr << "\r";
       serial_port.write(right_enccmd.str());
       serial_port.write(left_enccmd.str());
-      RCLCPP_INFO(this->get_logger(), "Encoder resolution set.");
+      RCLCPP_INFO(this->get_logger(), "Encoder resolution: %d", encoder_ppr);
+    }
+
+    void set_pid_parameters(uint8_t motor_id, double P, double I, double D)
+    {
+      std::stringstream cmd;
+      cmd << "^KP "<< motor_id << " " << uint16_t(P*10) << "\r";
+      serial_port.write(cmd.str());
+      cmd.str(std::string());
+      cmd << "^KI "<< motor_id << " " << uint16_t(I*10) << "\r";
+      serial_port.write(cmd.str());
+      cmd.str(std::string());
+      cmd << "^KD "<< motor_id << " " << uint16_t(D*10) << "\r";
+      serial_port.write(cmd.str());
+      RCLCPP_INFO(this->get_logger(), "Motor-%d PID\t: %f \t%f \t%f", motor_id, P, I, D);
     }
 
     void clear_buffer_history()
@@ -315,7 +377,8 @@ namespace roboteqBridge {
       serial_port.write(stream_command.str());
     }
 
-    void query_motor_feedback_stream(){
+    void query_motor_feedback_stream()
+    {
       // query motor speed and current streams at 20Hz
       std::stringstream stream_command;
       if (param_channel_order_RL) {
@@ -334,7 +397,7 @@ namespace roboteqBridge {
           stream_command << R"(/"LM="," "?a 1_?s 1_# 20)" << "\r";
           serial_port.write(stream_command.str());
       }
-      RCLCPP_INFO(this->get_logger(), "Feedback streams queried.");
+      RCLCPP_INFO(this->get_logger(), "Feedback streams  : ON");
     }
 
     void query_battery_state_stream(){
@@ -342,7 +405,7 @@ namespace roboteqBridge {
       stream_command.str(std::string());
       stream_command << R"(/"BA="," "?v 2_?t 1_# 100)" << "\r";
       serial_port.write(stream_command.str());
-      RCLCPP_INFO(this->get_logger(), "Battery state stream queried.");
+      RCLCPP_INFO(this->get_logger(), "Battery stream    : ON");
     }
 
     void send_motor_power_right(const int32_t motor_power)
@@ -391,6 +454,20 @@ namespace roboteqBridge {
         }
         serial_port.write(cmd.str());
         serial_port.flush();
+    }
+
+    void emergency_stop(){
+      std::stringstream cmd;
+      cmd << "!EX\r";
+      serial_port.write(cmd.str());
+      serial_port.flush();
+    }
+
+    void reset_emergency_stop(){
+      std::stringstream cmd;
+      cmd << "!MG\r";
+      serial_port.write(cmd.str());
+      serial_port.flush();
     }
 
     void read_feedback_stream()

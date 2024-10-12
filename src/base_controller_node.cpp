@@ -111,11 +111,9 @@ namespace roboteqBridge {
       this->set_pid_parameters(2, 1.5, 1.0, 0.0);
       this->set_watchdog(param_watchdog_timeout);
       this->set_control_loop(param_control_loop);
+      this->disable_echo();
       this->query_motor_feedback_stream();
       this->query_battery_state_stream();
-      this->reset_emergency_stop();
-      this->clear_buffer_history();
-      this->disable_echo();
       this->serial_port.flush();
 
       this->timer_ = this->create_wall_timer(1ms, std::bind(&baseController::read_feedback_stream, this));
